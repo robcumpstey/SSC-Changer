@@ -1,0 +1,82 @@
+WITH max_record as (
+                    SELECT meter_point_id, MAX(effective_from) as effective_from
+
+                    FROM consumer.wh_electricity_estimated_annual_consumption_interval
+
+                    --WHERE meter_point_id = 4551126
+
+                    GROUP BY 1
+),
+
+eac_data as (
+       SELECT MP.mpan,
+       EAC_TABLE.estimated_annual_consumption as EAC,
+       EAC_TABLE.time_pattern_regime_id as tpr,
+       EAC_TABLE.meter_point_id, EAC_TABLE.effective_from as meter_point_id,
+       EAC_TABLE.effective_from as effective_from
+       
+
+FROM consumer.wh_electricity_estimated_annual_consumption_interval AS EAC_TABLE
+
+INNER JOIN consumer.stg_properties_electricitymeterpoint MP ON EAC_TABLE.meter_point_id = MP.meter_point_id
+INNER JOIN max_record mr ON EAC_TABLE.meter_point_id = mr.meter_point_id
+and mr.effective_from = EAC_TABLE.effective_from
+
+WHERE EAC_TABLE.is_currently_active_record = TRUE
+--and mpan IN ('1100010852148')
+-- 1012521821007 // 1012721004456
+-- another 2 rate example; 1100010852148
+
+),
+
+total_eac as ( SELECT mpan,
+       sum(EAC) as acc_eac
+
+FROM eac_data
+
+/* WHERE mpan IN ('2000022938420','1419065901003','2200015044811','1900006327482','1900036162110','1012721004456','1800018420896','1100010852148','2312569361613',
+'1417280351003','1591059350871','1012885420641','1300013340969','1012521821007','2000016666569','1012789644500','1100002865684','1419937571004','1012797120887',
+'2600000668979') */
+
+GROUP BY 1
+
+)
+
+
+
+SELECT DISTINCT
+  MPOINT.mpan AS MPAN,
+  grid_supply_point_id AS GSP,
+  METER.meter_type AS Type,
+  METER.serial_number AS MSN,
+  marketparticipant.market_participant_name AS MOP,
+  wh.supplier_id as SUPPLIER,
+  te.acc_eac AS EAC,
+  wh.tariff_code AS TARIFF,
+  date(s2tariff.start_at) AS agreement_start,
+  date(DATEADD(DAY,1,date(s2tariff.start_at))) as EFD,
+  st.latest_dc_name as DC,
+  MPOINT.supply_start_date AS SSD
+  
+
+FROM
+  consumer.stg_properties_electricitymeterpoint AS MPOINT
+
+  LEFT JOIN consumer.stg_properties_electricitymeter AS METER ON METER.meter_point_id = MPOINT.meter_point_id
+  LEFT JOIN total_eac te ON MPOINT.mpan = te.mpan 
+  LEFT JOIN consumer.stg_properties_electricityagentcontract AS AGENT on AGENT.meter_point_id = MPOINT.meter_point_id
+  AND AGENT.contract_type = 'MOP'
+  AND AGENT.agent_contract_effective_from <= CURRENT_DATE
+  AND COALESCE(AGENT.agent_contract_effective_to, '9999-01-01') > CURRENT_DATE
+  LEFT JOIN consumer.stg_electricity_marketparticipant AS marketparticipant ON marketparticipant.market_participant_id = AGENT.market_participant_id
+  LEFT JOIN consumer.wh_electricity_validated_register_configuration_agreement_rate_interval wh ON MPOINT.mpan = wh.mpan
+  LEFT JOIN consumer.wh_electricity_agreement_interval d ON wh.agreement_id = d.agreement_id
+  LEFT JOIN octoenergy_data_prod_prod.consumer.stg_smets2_tariff as s2tariff ON s2tariff.mpxn = MPOINT.mpan
+  LEFT JOIN consumer.fnl_industry_settlement st ON MPOINT.mpan = st.mpan
+
+WHERE
+    MPOINT.mpan IN ('1012393918466','1160000844723','2000052732818','1630000555678')
+    AND METER.active_to IS NULL
+    and wh.is_currently_active_agreement = TRUE AND wh.is_currently_active_register = TRUE AND d.is_currently_active_agreement = TRUE
+
+GROUP BY 1, GSP, TYPE, MSN, MOP, SUPPLIER, EAC, TARIFF, agreement_start, DC, SSD;
